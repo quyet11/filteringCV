@@ -5,6 +5,9 @@ const bodyParser = require('body-parser');
 const mysql = require('mysql');
 const bcrypt = require('bcrypt');
 const nodemailer = require('nodemailer');
+const multer = require('multer');
+
+
 
 // Tạo ứng dụng Express
 const app = express();
@@ -49,6 +52,7 @@ const sendVerificationEmail = (fullname, email) => {
     return transporter.sendMail(mailOptions);
 };
 // Đăng nhập người dùng
+
 app.post('/login', (req, res) => {
     const { email, password } = req.body;
 
@@ -74,7 +78,6 @@ app.post('/login', (req, res) => {
         return res.status(200).json({ message: 'Đăng nhập thành công', user: { user_type: user.user_type } });
     });
 });
-
 
 // API đăng ký người dùng
 app.post('/register', (req, res) => {
@@ -125,17 +128,17 @@ app.post('/register', (req, res) => {
 // API để thêm job posting
 app.post('/job-postings', (req, res) => {
     // Kiểm tra dữ liệu từ request body
-    const { jobTitle, jobDescription, requiredSkills, experience, salaryRange, expiryDate, jobType } = req.body;
+    const { jobTitle, jobDescription, requiredSkills, experience, salaryRange, expiryDate, jobType, postedDate } = req.body;
 
-    if (!jobTitle || !jobDescription || !requiredSkills || !experience || !salaryRange || !expiryDate || !jobType) {
+    if (!jobTitle || !jobDescription || !requiredSkills || !experience || !salaryRange || !expiryDate || !jobType || !postedDate) {
         return res.status(400).json({ message: 'Thiếu dữ liệu cần thiết cho job posting' });
     }
 
-    const sql = `INSERT INTO job_postings (job_title, job_description, required_skills, experience, salary_range, expiry_date, job_type) 
-                 VALUES (?, ?, ?, ?, ?, ?, ?)`;
+    const sql = `INSERT INTO job_postings (job_title, job_description, required_skills, experience, salary_range, expiry_date, job_type, posted_date)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`; // Thêm posted_date vào cột
 
     // Chèn dữ liệu vào CSDL
-    db.query(sql, [jobTitle, jobDescription, requiredSkills, experience, salaryRange, expiryDate, jobType], (err, result) => {
+    db.query(sql, [jobTitle, jobDescription, requiredSkills, experience, salaryRange, expiryDate, jobType, postedDate], (err, result) => {
         if (err) {
             console.error('Lỗi khi lưu job posting:', err);
             return res.status(500).json({ message: 'Lưu job posting thất bại' });
@@ -146,7 +149,7 @@ app.post('/job-postings', (req, res) => {
 
 
 app.get('/job-postings', (req, res) => {
-    const sql = 'SELECT * FROM job_postings ORDER BY created_at DESC';
+    const sql = 'SELECT * FROM job_postings ORDER BY posted_date DESC';
 
     db.query(sql, (err, results) => {
         if (err) {
@@ -158,6 +161,73 @@ app.get('/job-postings', (req, res) => {
         return res.status(200).json(results);
     });
 });
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        cb(null, 'uploads/'); // Đường dẫn đến thư mục bạn muốn lưu tệp
+    },
+    filename: (req, file, cb) => {
+        cb(null, file.originalname); // Đặt tên cho tệp
+    },
+});
+
+const upload = multer({ storage: storage }); // Chỉ nên định nghĩa một lần
+
+
+// Route để nhận thông tin ứng tuyển
+app.post('/api/apply', upload.single('cv'), (req, res) => {
+    console.log('Request body:', req.body);
+    console.log('Uploaded file:', req.file);
+
+    const { fullName, email, coverLetter } = req.body;
+    const cvPath = req.file ? req.file.path : null;
+
+    // Kiểm tra dữ liệu
+    if (!fullName || !email || !coverLetter || !cvPath) {
+        return res.status(400).json({ message: 'Thiếu các trường bắt buộc' });
+    }
+
+    const sql = 'INSERT INTO applications (name, email, cover_letter, cv) VALUES (?, ?, ?, ?)';
+    db.query(sql, [fullName, email, coverLetter, cvPath], (error, results) => {
+        if (error) {
+            console.error('Database error:', error);
+            return res.status(500).json({ message: 'Lỗi khi lưu đơn ứng tuyển' });
+        }
+        res.status(200).json({ message: 'Đơn ứng tuyển đã được gửi thành công' });
+    });
+});
+// API để lưu hồ sơ ứng viên
+app.post('/api/candidate-profile', upload.single('profilePicture'), (req, res) => {
+    const { fullName, email, workExperience, education } = req.body;
+    const profilePicture = req.file ? req.file.path : null;
+
+    if (!fullName || !email || !profilePicture || !workExperience || !education) {
+        return res.status(400).json({ message: 'Thiếu các trường bắt buộc' });
+    }
+
+    // Kiểm tra email đã tồn tại chưa
+    const checkEmailSql = 'SELECT * FROM candidate_profiles WHERE email = ?';
+    db.query(checkEmailSql, [email], (error, results) => {
+        if (error) {
+            console.error('Database error:', error);
+            return res.status(500).json({ message: 'Lỗi kiểm tra email' });
+        }
+        if (results.length > 0) {
+            return res.status(400).json({ message: 'Email đã tồn tại' });
+        }
+
+        // Nếu email chưa tồn tại, tiếp tục lưu dữ liệu
+        const sql = 'INSERT INTO candidate_profiles (full_name, email, profile_picture, work_experience, education) VALUES (?, ?, ?, ?, ?)';
+        db.query(sql, [fullName, email, profilePicture, workExperience, education], (error, results) => {
+            if (error) {
+                console.error('Database error:', error);
+                return res.status(500).json({ message: 'Lỗi khi lưu thông tin ứng viên' });
+            }
+            res.status(200).json({ message: 'Lưu thông tin ứng viên thành công' });
+        });
+    });
+});
+
+
 
 
 
