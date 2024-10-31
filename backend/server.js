@@ -3,7 +3,6 @@ const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 const mysql = require('mysql');
-const bcrypt = require('bcrypt');
 const nodemailer = require('nodemailer');
 const multer = require('multer');
 
@@ -46,7 +45,7 @@ const sendVerificationEmail = (fullname, email) => {
         from: process.env.GMAIL_USER,
         to: email,
         subject: 'Email Xác Thực',
-        text: `Xin chào ${fullname}, vui lòng xác thực email của bạn bằng cách nhấp vào liên kết này: http://your-domain.com/verify?email=${email}`
+        text: `Xin chào ${fullname}, Chúc mừng bạn đã đăng ký thành công =${email}`
     };
 
     return transporter.sendMail(mailOptions);
@@ -105,9 +104,51 @@ app.post('/register', (req, res) => {
         }
 
         // Nếu email chưa tồn tại, lưu thông tin người dùng vào MySQL
-        const hashedPassword = bcrypt.hashSync(password, 10); // Băm mật khẩu
         const sql = 'INSERT INTO users (fullname, email, password, user_type) VALUES (?, ?, ?, ?)';
-        db.query(sql, [fullname, email, hashedPassword, user_type], (err, result) => {
+        db.query(sql, [fullname, email, password, user_type], (err, result) => {
+            if (err) {
+                console.error('Lỗi khi lưu dữ liệu:', err);
+                return res.status(500).json({ message: 'Đăng ký thất bại' });
+            }
+
+            // Gửi email xác thực
+            sendVerificationEmail(fullname, email)
+                .then(() => {
+                    return res.status(200).json({ message: 'Đăng ký thành công, kiểm tra email để xác thực!' });
+                })
+                .catch((error) => {
+                    console.error('Lỗi khi gửi email:', error);
+                    return res.status(500).json({ message: 'Không thể gửi email xác thực' });
+                });
+        });
+    });
+});app.post('/register', (req, res) => {
+    const { fullname, email, password, user_type } = req.body;
+
+    // Kiểm tra định dạng email
+    if (!email.endsWith('@gmail.com')) {
+        return res.status(400).json({ message: 'Vui lòng sử dụng địa chỉ Gmail hợp lệ' });
+    }
+
+    // Kiểm tra xem email đã tồn tại trong cơ sở dữ liệu
+    const checkEmailSql = 'SELECT * FROM users WHERE email = ?';
+    db.query(checkEmailSql, [email], (err, results) => {
+        if (err) {
+            console.error('Lỗi khi kiểm tra email:', err);
+            return res.status(500).json({ message: 'Đăng ký thất bại' });
+        }
+
+        console.log('Kết quả kiểm tra email:', results); // In ra kết quả kiểm tra email
+
+        // Kiểm tra nếu email đã tồn tại
+        if (results.length > 0) {
+            console.log('Email đã tồn tại:', email);
+            return res.status(400).json({ message: 'Email đã tồn tại. Vui lòng sử dụng email khác.' });
+        }
+
+        // Nếu email chưa tồn tại, lưu thông tin người dùng vào MySQL
+        const sql = 'INSERT INTO users (fullname, email, password, user_type) VALUES (?, ?, ?, ?)';
+        db.query(sql, [fullname, email, password, user_type], (err, result) => {
             if (err) {
                 console.error('Lỗi khi lưu dữ liệu:', err);
                 return res.status(500).json({ message: 'Đăng ký thất bại' });
@@ -125,6 +166,9 @@ app.post('/register', (req, res) => {
         });
     });
 });
+
+
+// API để thêm job posting
 // API để thêm job posting
 app.post('/job-postings', (req, res) => {
     // Kiểm tra dữ liệu từ request body
@@ -146,6 +190,7 @@ app.post('/job-postings', (req, res) => {
         return res.status(201).json({ message: 'Lưu job posting thành công' });
     });
 });
+
 
 
 app.get('/job-postings', (req, res) => {
@@ -176,18 +221,17 @@ const upload = multer({ storage: storage }); // Chỉ nên định nghĩa một 
 // Route để nhận thông tin ứng tuyển
 app.post('/api/apply', upload.single('cv'), (req, res) => {
     console.log('Request body:', req.body);
-    console.log('Uploaded file:', req.file);
+    console.log('User ID:', req.body.userId); // Hoặc `req.user.id` nếu dùng session
 
-    const { fullName, email, coverLetter } = req.body;
+    const { fullName, email, coverLetter, jobId, userId } = req.body;
     const cvPath = req.file ? req.file.path : null;
 
-    // Kiểm tra dữ liệu
-    if (!fullName || !email || !coverLetter || !cvPath) {
+    if (!fullName || !email || !coverLetter || !cvPath || !jobId || !userId) {
         return res.status(400).json({ message: 'Thiếu các trường bắt buộc' });
     }
 
-    const sql = 'INSERT INTO applications (name, email, cover_letter, cv) VALUES (?, ?, ?, ?)';
-    db.query(sql, [fullName, email, coverLetter, cvPath], (error, results) => {
+    const sql = 'INSERT INTO applications (name, email, cover_letter, cv, job_id, user_id) VALUES (?, ?, ?, ?, ?, ?)';
+    db.query(sql, [fullName, email, coverLetter, cvPath, jobId, userId], (error, results) => {
         if (error) {
             console.error('Database error:', error);
             return res.status(500).json({ message: 'Lỗi khi lưu đơn ứng tuyển' });
@@ -195,6 +239,8 @@ app.post('/api/apply', upload.single('cv'), (req, res) => {
         res.status(200).json({ message: 'Đơn ứng tuyển đã được gửi thành công' });
     });
 });
+
+
 // API để lưu hồ sơ ứng viên
 app.post('/api/candidate-profile', upload.single('profilePicture'), (req, res) => {
     const { fullName, email, workExperience, education } = req.body;
@@ -229,6 +275,81 @@ app.post('/api/candidate-profile', upload.single('profilePicture'), (req, res) =
 
 
 
+
+// API để lấy danh sách ứng viên
+app.get('/api/candidates', (req, res) => {
+    const sql = 'SELECT * FROM candidate_profiles';
+
+    db.query(sql, (err, results) => {
+        if (err) {
+            console.error('Lỗi khi lấy danh sách ứng viên:', err);
+            return res.status(500).json({ message: 'Lấy danh sách ứng viên thất bại' });
+        }
+
+        return res.status(200).json(results);
+    });
+});
+app.get('/api/applications/:jobId', (req, res) => {
+    const { jobId } = req.params;
+    const sql = 'SELECT * FROM applications WHERE job_id = ?';
+
+    db.query(sql, [jobId], (err, results) => {
+        if (err) {
+            console.error('Lỗi khi lấy danh sách ứng tuyển:', err);
+            return res.status(500).json({ message: 'Lấy danh sách ứng tuyển thất bại' });
+        }
+
+        return res.status(200).json(results);
+    });
+});
+app.get('/api/applicants', (req, res) => {
+    const sql = 'SELECT * FROM applications';
+    db.query(sql, (err, results) => {
+        if (err) {
+            console.error('Lỗi khi lấy danh sách ứng viên:', err);
+            res.status(500).json({ message: 'Lỗi khi lấy danh sách ứng viên' });
+        } else {
+            res.json(results);
+        }
+    });
+});
+// In your Express server file
+app.use(express.json());
+app.post('/api/evaluate-cv', (req, res) => {
+    const applicantData = req.body;
+
+    console.log('Applicant Data:', applicantData); // Log dữ liệu nhận được
+
+    const evaluationResult = {
+        applicantName: applicantData.name,
+        score: Math.random() * 100,
+        feedback: "Good candidate for the job.",
+    };
+
+    // Kiểm tra định dạng JSON
+    console.log('Evaluation Result:', evaluationResult);
+
+    res.json(evaluationResult);
+});
+app.get('/api/applicants/:id', (req, res) => {
+    const { id } = req.params; // Lấy ID từ tham số URL
+    const sql = 'SELECT * FROM applications WHERE id = ?'; // Truy vấn để lấy thông tin ứng viên theo ID
+
+    db.query(sql, [id], (err, results) => {
+        if (err) {
+            console.error('Lỗi khi lấy thông tin ứng viên:', err);
+            return res.status(500).json({ message: 'Lấy thông tin ứng viên thất bại' });
+        }
+
+        // Kiểm tra xem có ứng viên nào với ID đã cho không
+        if (results.length === 0) {
+            return res.status(404).json({ message: 'Không tìm thấy ứng viên với ID đã cho.' });
+        }
+
+        // Trả về thông tin ứng viên
+        return res.status(200).json(results[0]);
+    });
+});
 
 
 // Chạy server trên cổng 3001
